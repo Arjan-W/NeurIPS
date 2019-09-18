@@ -1,6 +1,5 @@
 from PyUnityCommander import PyUnityCommander
 
-
 def main():
 	commander = PyUnityCommander()
 	commander.init_hotkeys()
