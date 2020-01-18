@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 from collections import namedtuple
 from itertools import count
 from PIL import Image
+import copy
+import datetime
 
 import torch
 import torch.nn as nn
@@ -22,12 +24,15 @@ import torch.nn.functional as F
 class Agent:
     def __init__(self):
         self.model = Network().double()
-        self.memory = deque(maxlen=500)
+        self.target_model = copy.deepcopy(self.model)
+        self.replay_count = 0
+        self.memory = deque(maxlen=1000)
         self.iteration = 0
         
         self.epsilon = 1
-        self.eps_decay = 0.05
+        self.eps_decay = 0.01
         self.eps_min = 0.09
+        self.optimizer = optim.Adam(self.model.parameters())
         
         self.gamma = 0.95
         pass
@@ -66,39 +71,69 @@ class Agent:
         else:
             self.memory.append((state, action, reward, new_state, False))
         
-    def replay(self):
-        print("replay buffer started")
-        print("memory size: {}".format(len(self.memory)))
-        size = 200
-        batch = random.sample(self.memory, size)
+    def replay(self, device):
+        if len(self.memory) > 500:
+            print("replay buffer started")
+            print("memory size: {}".format(len(self.memory)))
+            size = 20
+            batch = random.sample(self.memory, size)
+            
+            for state, action, reward, new_state, done in self.memory:
+                if reward == 10:
+                    batch.append((state, action, reward, new_state, done))
+                    
+            # make copy of Q; this one is kept stable, the original Q (network) is updated.
+            self.optimizer.zero_grad()
+            loss_list = []
+            self.replay_count +=1
+            
+            
+            # mean squared error
+            print(datetime.datetime.now())
+            print("start calculating error")
+            for state, action, reward, new_state, done in batch:
+                loss_list.append(self.loss(state, action, reward, new_state, done, device))
+            MSE = sum(loss_list)/len(loss_list)
+            print("end calculating error")
+            print(datetime.datetime.now())
+            print("start learning")
+            MSE.backward()
+            self.optimizer.step()
+            print("end learning")
+            print(datetime.datetime.now())
         
-        for state, action, reward, new_state, done in batch:
+        
+            print("replay buffer ended")
+            print("current epsilon: {}".format(self.epsilon))
             
-            #print("replay")
+            if self.replay_count % 8 == 0:
+                self.target_model.load_state_dict(self.model.state_dict())
+            
+            
+            
+    def loss(self, state, action, reward, new_state, done, device="cpu"):
+        reward_gpu = torch.tensor(reward).to(device)
+        action_gpu = torch.tensor(action).to(device)
+        #print("replay")
             # formula when reaching end goal in this timestep:
-            target = reward
-            # formula when not reaching end goal in this timestep:
-            if not done:
-                data = np.expand_dims(np.swapaxes(np.array(self.state2image(new_state), dtype='d'), 0, 2), axis=0)
-                x = torch.tensor(data, dtype=torch.double)
-                Q_target_output = self.model.forward(x)
+        target = reward
+        # formula when not reaching end goal in this timestep:
+        if not done:
+            data = np.expand_dims(np.swapaxes(np.array(self.state2image(new_state), dtype='d'), 0, 2), axis=0)
+            x = torch.tensor(data, dtype=torch.double).to(device)
+            Q_target_output = self.target_model.forward(x)
                 
-                # real reward
-                target = reward + self.gamma*torch.max(Q_target_output)
+            # real reward
+            target = reward_gpu + self.gamma*torch.max(Q_target_output)
                 
-            # the prediction
-            data = np.expand_dims(np.swapaxes(np.array(self.state2image(state), dtype='d'), 0, 2), axis=0)
-            x = torch.tensor(data, dtype=torch.double)
-            Q_predicted_output = self.model.forward(x)
-            prediction = Q_predicted_output[action-1]
+        # the prediction
+        data = np.expand_dims(np.swapaxes(np.array(self.state2image(state), dtype='d'), 0, 2), axis=0)
+        x = torch.tensor(data, dtype=torch.double).to(device)
+        Q_predicted_output = self.model.forward(x)
+        prediction = Q_predicted_output[action_gpu-1]
             
-            print(target)
-            loss = (prediction-(target.item())).pow(2)
-            loss.backward()
-        if self.eps_min < self.epsilon:
-            self.epsilon -= self.eps_decay
-        print("replay buffer ended")
-        print("current epsilon: {}".format(self.epsilon))
+        loss = (prediction-target).pow(2)
+        return loss
             
         
     
